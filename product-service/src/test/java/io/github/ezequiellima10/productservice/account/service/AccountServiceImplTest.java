@@ -1,0 +1,289 @@
+package io.github.ezequiellima10.productservice.account.service;
+
+import io.github.ezequiellima10.productservice.account.dto.AccountRequestDTO;
+import io.github.ezequiellima10.productservice.account.dto.AccountRequestUpdateDTO;
+import io.github.ezequiellima10.productservice.account.dto.AccountResponseDTO;
+import io.github.ezequiellima10.productservice.account.exception.AccountAlreadyExistsException;
+import io.github.ezequiellima10.productservice.account.exception.AccountNotFoundException;
+import io.github.ezequiellima10.productservice.account.mapper.AccountMapper;
+import io.github.ezequiellima10.productservice.account.model.Account;
+import io.github.ezequiellima10.productservice.account.model.AccountType;
+import io.github.ezequiellima10.productservice.account.model.CheckingAccount;
+import io.github.ezequiellima10.productservice.account.model.SavingsAccount;
+import io.github.ezequiellima10.productservice.account.repository.AccountRepository;
+import io.github.ezequiellima10.productservice.shared.dto.ResponsePageDTO;
+import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.extension.ExtendWith;
+import org.mockito.ArgumentCaptor;
+import org.mockito.InOrder;
+import org.mockito.InjectMocks;
+import org.mockito.Mock;
+import org.mockito.junit.jupiter.MockitoExtension;
+import org.springframework.data.domain.Page;
+import org.springframework.data.domain.PageImpl;
+import org.springframework.data.domain.PageRequest;
+import org.springframework.data.domain.Pageable;
+import org.springframework.test.util.ReflectionTestUtils;
+
+import java.math.BigDecimal;
+import java.util.List;
+import java.util.Optional;
+
+import static org.junit.jupiter.api.Assertions.*;
+import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.Mockito.*;
+
+@ExtendWith(MockitoExtension.class)
+class AccountServiceImplTest {
+
+    @Mock
+    private AccountRepository accountRepository;
+
+    @Mock
+    private AccountMapper accountMapper;
+
+    @InjectMocks
+    private AccountServiceImpl accountService;
+
+    private final Long holderId = 1L;
+
+
+    @Test
+    void create_savingsAccount_savesSavingsAccountWithHolder() {
+        // given
+        AccountRequestDTO request = new AccountRequestDTO(1L, "mi.caja", AccountType.SAVINGS, null);
+        SavingsAccount savedAccount = new SavingsAccount(holderId, "mi.caja");
+        AccountResponseDTO expectedResponse = AccountResponseDTO.builder().alias("mi.caja").accountType(AccountType.SAVINGS).build();
+
+        when(accountRepository.existsByAlias("mi.caja")).thenReturn(false);
+        when(accountMapper.toEntity(request)).thenReturn(savedAccount);
+        when(accountRepository.save(any(Account.class))).thenReturn(savedAccount);
+        when(accountMapper.entityToResponseDTO(savedAccount)).thenReturn(expectedResponse);
+
+        // when
+        AccountResponseDTO result = accountService.create(request);
+
+        // then
+        assertEquals(expectedResponse, result);
+
+        // the captor "grabs" the account the service passed to save() so it can be inspected
+        ArgumentCaptor<Account> captor = ArgumentCaptor.forClass(Account.class);
+        verify(accountRepository).save(captor.capture());
+        Account accountToSave = captor.getValue();
+
+        assertInstanceOf(SavingsAccount.class, accountToSave);
+        assertEquals("mi.caja", accountToSave.getAlias());
+    }
+
+    @Test
+    void create_checkingAccount_savesWithOverdraftLimit() {
+        // given
+        AccountRequestDTO request = new AccountRequestDTO(1L, "mi.corriente", AccountType.CHECKING, new BigDecimal("5000"));
+        CheckingAccount savedAccount = new CheckingAccount(holderId, "mi.corriente", new BigDecimal("5000"));
+        AccountResponseDTO expectedResponse = AccountResponseDTO.builder().alias("mi.corriente").accountType(AccountType.CHECKING).build();
+
+        when(accountRepository.existsByAlias("mi.corriente")).thenReturn(false);
+        when(accountMapper.toEntity(request)).thenReturn(savedAccount);
+        when(accountRepository.save(any(Account.class))).thenReturn(savedAccount);
+        when(accountMapper.entityToResponseDTO(savedAccount)).thenReturn(expectedResponse);
+
+        // when
+        AccountResponseDTO result = accountService.create(request);
+
+        // then
+        assertEquals(expectedResponse, result);
+
+        ArgumentCaptor<Account> captor = ArgumentCaptor.forClass(Account.class);
+        verify(accountRepository).save(captor.capture());
+        Account accountToSave = captor.getValue();
+
+        assertInstanceOf(CheckingAccount.class, accountToSave);
+        assertEquals(new BigDecimal("5000"), ((CheckingAccount) accountToSave).getOverdraftLimit());
+    }
+
+    @Test
+    void create_duplicateAlias_throwsAccountAlreadyExistsException() {
+        // given
+        AccountRequestDTO request = new AccountRequestDTO(1L, "mi.caja", AccountType.SAVINGS, null);
+
+        when(accountRepository.existsByAlias("mi.caja")).thenReturn(true);
+
+        // when / then
+        assertThrows(AccountAlreadyExistsException.class, () -> accountService.create(request));
+
+        verify(accountRepository, never()).save(any(Account.class));
+    }
+
+    @Test
+    void update_newAlias_updatesAlias() {
+        // given
+        Account account = new SavingsAccount(holderId, "alias.viejo");
+        AccountRequestUpdateDTO request = new AccountRequestUpdateDTO("alias.nuevo");
+        AccountResponseDTO expectedResponse = AccountResponseDTO.builder().alias("alias.nuevo").build();
+
+        when(accountRepository.findById(10L)).thenReturn(Optional.of(account));
+        when(accountRepository.existsByAlias("alias.nuevo")).thenReturn(false);
+        when(accountMapper.entityToResponseDTO(account)).thenReturn(expectedResponse);
+
+        // when
+        AccountResponseDTO result = accountService.update(10L, request);
+
+        // then
+        assertEquals("alias.nuevo", account.getAlias());
+        assertEquals(expectedResponse, result);
+    }
+
+    @Test
+    void update_aliasFromAnotherAccount_throwsAccountAlreadyExistsException() {
+        // given
+        Account account = new SavingsAccount(holderId, "alias.viejo");
+        AccountRequestUpdateDTO request = new AccountRequestUpdateDTO("alias.ocupado");
+
+        when(accountRepository.findById(10L)).thenReturn(Optional.of(account));
+        when(accountRepository.existsByAlias("alias.ocupado")).thenReturn(true);
+
+        // when / then
+        assertThrows(AccountAlreadyExistsException.class, () -> accountService.update(10L, request));
+
+        assertEquals("alias.viejo", account.getAlias());
+    }
+
+    @Test
+    void update_nonexistentAccount_throwsAccountNotFoundException() {
+        // given
+        AccountRequestUpdateDTO request = new AccountRequestUpdateDTO("alias.nuevo");
+
+        when(accountRepository.findById(99L)).thenReturn(Optional.empty());
+
+        // when / then
+        assertThrows(AccountNotFoundException.class, () -> accountService.update(99L, request));
+    }
+
+    @Test
+    void findById_nonexistent_throwsAccountNotFoundException() {
+        // given
+        when(accountRepository.findById(99L)).thenReturn(Optional.empty());
+
+        // when / then
+        assertThrows(AccountNotFoundException.class, () -> accountService.findById(99L));
+    }
+
+    @Test
+    void findAll_mapsPageToDtos() {
+        // given
+        Pageable pageable = PageRequest.of(0, 10);
+        Account savings = new SavingsAccount(holderId, "caja.uno");
+        Account checking = new CheckingAccount(holderId, "corriente.uno", new BigDecimal("1000"));
+        Page<Account> page = new PageImpl<>(List.of(savings, checking), pageable, 2);
+
+        AccountResponseDTO savingsDto = AccountResponseDTO.builder().alias("caja.uno").build();
+        AccountResponseDTO checkingDto = AccountResponseDTO.builder().alias("corriente.uno").build();
+
+        when(accountRepository.findAll(pageable)).thenReturn(page);
+        when(accountMapper.entityToResponseDTO(savings)).thenReturn(savingsDto);
+        when(accountMapper.entityToResponseDTO(checking)).thenReturn(checkingDto);
+
+        // when
+        ResponsePageDTO<AccountResponseDTO> result = accountService.findAll(pageable);
+
+        // then
+        assertEquals(List.of(savingsDto, checkingDto), result.dtos());
+        assertEquals(0, result.pageNumber());
+        assertEquals(10, result.pageSize());
+        assertEquals(2, result.totalElements());
+        assertEquals(1, result.totalPages());
+    }
+
+    @Test
+    void delete_existingWithZeroBalance_closesAccount() {
+        // given
+        SavingsAccount savings = new SavingsAccount(holderId, "caja.uno");
+        when(accountRepository.findWithLockById(10L)).thenReturn(Optional.of(savings));
+
+        // when
+        accountService.delete(10L);
+
+        // then
+        assertFalse(savings.isActive());
+    }
+
+    @Test
+    void delete_nonexistent_throwsExceptionAndDoesNotDelete() {
+        // given
+        when(accountRepository.findWithLockById(99L)).thenReturn(Optional.empty());
+
+        // when / then
+        assertThrows(AccountNotFoundException.class, () -> accountService.delete(99L));
+
+    }
+
+
+    @Test
+    void deposit_existingAccount_increasesBalance(){
+        //given
+        SavingsAccount savings = new SavingsAccount(holderId, "caja.uno");
+        AccountResponseDTO expectedResponse =  AccountResponseDTO.builder().alias("caja.uno").build();
+
+        when(accountRepository.findWithLockById(10L)).thenReturn(Optional.of(savings));
+        when(accountMapper.entityToResponseDTO(savings)).thenReturn(expectedResponse);
+        //when
+        AccountResponseDTO result = accountService.deposit(10L, new BigDecimal("1000"));
+        //then
+        assertEquals(new BigDecimal("1000"), savings.getBalance());
+        assertEquals(expectedResponse, result);
+    }
+
+    @Test
+    void deposit_nonexistentAccount_throwsAccountNotFoundException() {
+        // given
+        when(accountRepository.findWithLockById(99L)).thenReturn(Optional.empty());
+
+        // when / then
+        assertThrows(AccountNotFoundException.class, () -> accountService.deposit(99L, new BigDecimal("1000")));
+    }
+
+    @Test
+    void withdraw_existingAccount_decreasesBalance() {
+        // given
+        SavingsAccount savings = new SavingsAccount(holderId, "caja.uno");
+        savings.deposit(new BigDecimal("1000"));
+        AccountResponseDTO expectedResponse = AccountResponseDTO.builder().alias("caja.uno").build();
+
+        when(accountRepository.findWithLockById(10L)).thenReturn(Optional.of(savings));
+        when(accountMapper.entityToResponseDTO(savings)).thenReturn(expectedResponse);
+
+        // when
+        AccountResponseDTO result = accountService.withdraw(10L, new BigDecimal("400"));
+
+        // then
+        assertEquals(new BigDecimal("600"), savings.getBalance());
+        assertEquals(expectedResponse, result);
+    }
+
+    @Test
+    void transfer_originWithHigherId_locksLowerIdFirstAndMovesFunds() {
+        // given
+        SavingsAccount origin = new SavingsAccount(holderId, "caja.origen");
+        origin.deposit(new BigDecimal("1000"));
+        SavingsAccount destination = new SavingsAccount(holderId, "caja.destino");
+
+        // entities have no id setter (JPA generates it), so it is set by reflection for the test
+        ReflectionTestUtils.setField(origin, "id", 20L);
+        ReflectionTestUtils.setField(destination, "id", 10L);
+
+        when(accountRepository.findWithLockById(10L)).thenReturn(Optional.of(destination));
+        when(accountRepository.findWithLockById(20L)).thenReturn(Optional.of(origin));
+
+        // when
+        accountService.transfer(20L, 10L, new BigDecimal("400"));
+
+        // then
+        // the lower id is locked first whatever its role: A→B and B→A lock in the same order, so no deadlock
+        InOrder inOrder = inOrder(accountRepository);
+        inOrder.verify(accountRepository).findWithLockById(10L);
+        inOrder.verify(accountRepository).findWithLockById(20L);
+
+        assertEquals(new BigDecimal("600"), origin.getBalance());
+        assertEquals(new BigDecimal("400"), destination.getBalance());
+    }
+}
