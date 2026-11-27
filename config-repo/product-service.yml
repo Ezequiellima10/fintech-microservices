@@ -4,8 +4,8 @@ server:
 spring:
   datasource:
     url: jdbc:h2:mem:products
-    username: sa
-    password: ""
+    username: ${PRODUCT_DB_USER:sa}
+    password: ${PRODUCT_DB_PASSWORD:}
   h2:
     console:
       enabled: true
