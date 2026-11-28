@@ -4,8 +4,8 @@ server:
 spring:
   datasource:
     url: jdbc:h2:mem:customers
-    username: sa
-    password: ""
+    username: ${CUSTOMER_DB_USER:sa}
+    password: ${CUSTOMER_DB_PASSWORD:}
   h2:
     console:
       enabled: true
@@ -14,3 +14,14 @@ spring:
     hibernate:
       ddl-auto: update
     show-sql: true
+  cloud:
+    openfeign:
+      client:
+        config:
+          default:
+            connect-timeout: 3000
+            read-timeout: 5000
+
+clients:
+  account:
+    service-name: product-service
